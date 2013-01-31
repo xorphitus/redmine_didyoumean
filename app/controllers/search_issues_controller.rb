@@ -5,8 +5,7 @@ class SearchIssuesController < ApplicationController
   unloadable
 
   def index
-  
-    @query = params[:query] || ""   
+    @query = params[:query] || ""
     @query.strip!
 
     logger.debug "Got request for [#{@query}]"
@@ -27,13 +26,9 @@ class SearchIssuesController < ApplicationController
       # this is probably too strict, in this use case
       @tokens.slice! 5..-1 if @tokens.size > 5
 
-      if all_words
-        separator = ' AND '
-      else
-        separator = ' OR '
-      end
+      separator = all_words ? ' AND ' : ' OR '
 
-      @tokens.map! {|cur| '%' + cur +'%'}
+      @tokens.map! {|cur| "%#{cur}%"}
 
       conditions = (['lower(subject) like lower(?)'] * @tokens.length).join(separator)
       variables = @tokens
@@ -43,18 +38,8 @@ class SearchIssuesController < ApplicationController
 
       # when editing an existing issue this will hold its id
       issue_id = params[:issue_id] unless params[:issue_id].blank?
-      
-      case Setting.plugin_redmine_didyoumean['project_filter']
-      when '2'
-        project_tree = Project.all
-      when '1'
-        # search subprojects too
-        project_tree = project ? (project.self_and_descendants.active) : nil
-      when '0'
-        project_tree = [project]
-      else
-        logger.warn "Unrecognized option for project filter: [#{Setting.plugin_redmine_didyoumean['project_filter']}], skipping"
-      end
+
+      project_tree = to_project_tree project, Setting.plugin_redmine_didyoumean['project_filter']
 
       if project_tree
         # check permissions
@@ -63,7 +48,7 @@ class SearchIssuesController < ApplicationController
         conditions += " AND project_id in (?)"
         variables << scope
       end
-      
+
       if Setting.plugin_redmine_didyoumean['show_only_open'] == "1"
         valid_statuses = IssueStatus.all(:conditions => ["is_closed <> ?", true])
         logger.debug "Valid status ids are #{valid_statuses}"
@@ -78,35 +63,46 @@ class SearchIssuesController < ApplicationController
       end
 
       limit = Setting.plugin_redmine_didyoumean['limit']
-      limit = 5 if limit.nil? or limit.empty?
+      limit = 5 if limit.blank?
 
-      @issues = Issue.visible.find(:all, :conditions => [conditions, *variables], :limit => limit)
+      # order by decreasing creation time. Some relevance sort would be a lot more appropriate here
+      @issues = Issue.visible.find(:all, :conditions => [conditions, *variables], :limit => limit).order("id DESC")
       @count = Issue.visible.count(:all, :conditions => [conditions, *variables])
 
       logger.debug "#{@count} results found, returning the first #{@issues.length}"
-
-      # order by decreasing creation time. Some relevance sort would be a lot more appropriate here
-      @issues = @issues.sort {|a,b| b.id <=> a.id}
-      
-
     else
       @query = ""
       @count = 0
       @issues = []
     end
 
-    render :json => { :total => @count, :issues => @issues.map{|i| 
-      { #make a deep copy, otherwise rails3 makes weird stuff nesting the issue as mapping.
-      :id => i.id,
-      :tracker_name => i.tracker.name,
-      :subject => i.subject,
-      :status_name => i.status.name,
-      :project_name => i.project.name
-      }
-    }}
+    render :json => { :total => @count, :issues => @issues.map{|i|
+        { #make a deep copy, otherwise rails3 makes weird stuff nesting the issue as mapping.
+          :id => i.id,
+          :tracker_name => i.tracker.name,
+          :subject => i.subject,
+          :status_name => i.status.name,
+          :project_name => i.project.name
+        }
+      }}
   end
 
   private
+  def to_project_tree project, project_filter
+    case project_filter
+    when '2'
+      project_tree = Project.all
+    when '1'
+      # search subprojects too
+      project_tree = project ? (project.self_and_descendants.active) : nil
+    when '0'
+      project_tree = [project]
+    else
+      logger.warn "Unrecognized option for project filter: [#{Setting.plugin_redmine_didyoumean['project_filter']}], skipping"
+      nil
+    end
+  end
+
   def to_nouns str
     dict_dir = Setting.plugin_redmine_didyoumean['dict_dir']
     tagger = Okura::Serializer::FormatInfo.create_tagger dict_dir
