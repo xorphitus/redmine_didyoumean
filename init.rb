@@ -13,7 +13,8 @@ Redmine::Plugin.register :redmine_didyoumean do
     'project_filter' => '1',
     'min_word_length' => '2',
     'limit' => '5',
-    'start_search_when' => '0'
+    'start_search_when' => '0',
+    'dict_dir' => '/home/hoge/dict_dir'
   }
 
   settings(:default => default_settings, :partial => 'settings/didyoumean_settings')

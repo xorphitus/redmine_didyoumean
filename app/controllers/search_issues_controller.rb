@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+require 'okura/serializer'
+
 class SearchIssuesController < ApplicationController
   unloadable
 
@@ -14,7 +17,8 @@ class SearchIssuesController < ApplicationController
     # extract tokens from the query
     # eg. hello "bye bye" => ["hello", "bye bye"]
     @tokens = @query.scan(%r{((\s|^)"[\s\w]+"(\s|$)|\S+)}).collect {|m| m.first.gsub(%r{(^\s*"\s*|\s*"\s*$)}, '')}
-    
+      .inject([]) {|sum, token| sum << to_nouns(token)}
+
     min_length = Setting.plugin_redmine_didyoumean['min_word_length'].to_i
     @tokens = @tokens.uniq.select {|w| w.length >= min_length }
 
@@ -100,5 +104,16 @@ class SearchIssuesController < ApplicationController
       :project_name => i.project.name
       }
     }}
+  end
+
+  private
+  def to_nouns str
+    dict_dir = Setting.plugin_redmine_didyoumean['dict_dir']
+    tagger = Okura::Serializer::FormatInfo.create_tagger dict_dir
+
+    tagger.parse(str).mincost_path
+      .map {|node| node.word}
+      .select {|word| word.left.text.match /^名詞,/}
+      .map {|word| word.surface}
   end
 end
