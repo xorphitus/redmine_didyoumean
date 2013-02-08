@@ -15,8 +15,7 @@ class SearchIssuesController < ApplicationController
 
     # extract tokens from the query
     # eg. hello "bye bye" => ["hello", "bye bye"]
-    @tokens = @query.scan(%r{((\s|^)"[\s\w]+"(\s|$)|\S+)}).collect {|m| m.first.gsub(%r{(^\s*"\s*|\s*"\s*$)}, '')}
-      .inject([]) {|sum, token| sum << to_nouns(token)}
+    @tokens = to_nouns(@query).concat @query.scan(/\w+/)
 
     min_length = Setting.plugin_redmine_didyoumean['min_word_length'].to_i
     @tokens = @tokens.uniq.select {|w| w.length >= min_length }
@@ -66,7 +65,7 @@ class SearchIssuesController < ApplicationController
       limit = 5 if limit.blank?
 
       # order by decreasing creation time. Some relevance sort would be a lot more appropriate here
-      @issues = Issue.visible.find(:all, :conditions => [conditions, *variables], :limit => limit).order("id DESC")
+      @issues = Issue.visible.find(:all, :conditions => [conditions, *variables], :limit => limit, :order => '"issues"."id" DESC')
       @count = Issue.visible.count(:all, :conditions => [conditions, *variables])
 
       logger.debug "#{@count} results found, returning the first #{@issues.length}"
@@ -103,11 +102,9 @@ class SearchIssuesController < ApplicationController
     end
   end
 
+  @@tagger = Okura::Serializer::FormatInfo.create_tagger Setting.plugin_redmine_didyoumean['dict_dir']
   def to_nouns str
-    dict_dir = Setting.plugin_redmine_didyoumean['dict_dir']
-    tagger = Okura::Serializer::FormatInfo.create_tagger dict_dir
-
-    tagger.parse(str).mincost_path
+    @@tagger.parse(str).mincost_path
       .map {|node| node.word}
       .select {|word| word.left.text.match /^名詞,/}
       .map {|word| word.surface}
