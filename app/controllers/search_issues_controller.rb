@@ -4,6 +4,8 @@ require 'okura/serializer'
 class SearchIssuesController < ApplicationController
   unloadable
 
+  DEFAULT_LIMIT = 5
+
   def index
     @query = params[:query] || ""
     @query.strip!
@@ -18,9 +20,9 @@ class SearchIssuesController < ApplicationController
     @tokens = to_nouns(@query).concat @query.scan(/\w+/)
 
     min_length = Setting.plugin_redmine_didyoumean['min_word_length'].to_i
-    @tokens = @tokens.uniq.select {|w| w.length >= min_length }
+    @tokens = @tokens.uniq.select {|w| w.length >= min_length}
 
-    if !@tokens.empty?
+    if @tokens.present?
       # no more than 5 tokens to search for
       # this is probably too strict, in this use case
       @tokens.slice! 5..-1 if @tokens.size > 5
@@ -40,29 +42,11 @@ class SearchIssuesController < ApplicationController
 
       project_tree = to_project_tree project, Setting.plugin_redmine_didyoumean['project_filter']
 
-      if project_tree
-        # check permissions
-        scope = project_tree.select {|p| User.current.allowed_to?(:view_issues, p)}
-        logger.debug "Set project filter to #{scope}"
-        conditions += " AND project_id in (?)"
-        variables << scope
-      end
+      additional_conditions, additional_variables = additional_params(project_tree, issue_id)
+      conditions += additional_conditions
+      variables = variables.concat additional_variables
 
-      if Setting.plugin_redmine_didyoumean['show_only_open'] == "1"
-        valid_statuses = IssueStatus.all(:conditions => ["is_closed <> ?", true])
-        logger.debug "Valid status ids are #{valid_statuses}"
-        conditions += " AND status_id in (?)"
-        variables << valid_statuses
-      end
-
-      if !issue_id.nil?
-        logger.debug "Excluding issue #{issue_id}"
-        conditions += " AND issues.id != (?)"
-        variables << issue_id
-      end
-
-      limit = Setting.plugin_redmine_didyoumean['limit']
-      limit = 5 if limit.blank?
+      limit = Setting.plugin_redmine_didyoumean['limit'] || DEFAULT_LIMIT
 
       # order by decreasing creation time. Some relevance sort would be a lot more appropriate here
       @issues = Issue.visible.find(:all, :conditions => [conditions, *variables], :limit => limit, :order => '"issues"."id" DESC')
@@ -75,13 +59,13 @@ class SearchIssuesController < ApplicationController
       @issues = []
     end
 
-    render :json => { :total => @count, :issues => @issues.map{|i|
+    render :json => {:total => @count, :issues => @issues.map{|issue|
         { #make a deep copy, otherwise rails3 makes weird stuff nesting the issue as mapping.
-          :id => i.id,
-          :tracker_name => i.tracker.name,
-          :subject => i.subject,
-          :status_name => i.status.name,
-          :project_name => i.project.name
+          :id => issue.id,
+          :tracker_name => issue.tracker.name,
+          :subject => issue.subject,
+          :status_name => issue.status.name,
+          :project_name => issue.project.name
         }
       }}
   end
@@ -102,7 +86,35 @@ class SearchIssuesController < ApplicationController
     end
   end
 
-  @@tagger = Okura::Serializer::FormatInfo.create_tagger Setting.plugin_redmine_didyoumean['dict_dir']
+  def additional_params project_tree, issue_id
+    additional_conditions = ''
+    additional_variables = []
+
+    if project_tree
+      # check permissions
+      scope = project_tree.select {|project| User.current.allowed_to?(:view_issues, project)}
+      logger.debug "Set project filter to #{scope}"
+      additional_conditions += " AND project_id in (?)"
+      additional_variables << scope
+    end
+
+    if Setting.plugin_redmine_didyoumean['show_only_open'] == "1"
+      valid_statuses = IssueStatus.all(:conditions => ["is_closed <> ?", true])
+      logger.debug "Valid status ids are #{valid_statuses}"
+      additional_conditions += " AND status_id in (?)"
+      additional_variables << valid_statuses
+    end
+
+    if !issue_id.nil?
+      logger.debug "Excluding issue #{issue_id}"
+      additional_conditions += " AND issues.id != (?)"
+      additional_variables << issue_id
+    end
+
+    [additional_conditions, additional_variables]
+  end
+
+  @@tagger = Okura::Serializer::FormatInfo.create_tagger Setting.plugin_redmine_didyoumean['dictionary_path']
   def to_nouns str
     @@tagger.parse(str).mincost_path
       .map {|node| node.word}

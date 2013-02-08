@@ -16,3 +16,4 @@ en:
   dym_start_search_when_label: "Start search:"
   dym_leaving_field: "when leaving the subject field"
   dym_while_typing: "while typing the issue subject"
+  dym_dictionary_path: "Dictionary path"

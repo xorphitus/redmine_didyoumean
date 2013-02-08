@@ -38,5 +38,11 @@
             }, @settings['start_search_when'])
 %>
 </p>
-
+<p>
+<label><%= l(:dym_dictionary_path)%></label>
+<%= text_field_tag('settings[dictionary_path]',
+                   @settings['dictionary_path'],
+                   :type => 'string')
+%>
+</p>
 </fieldset>

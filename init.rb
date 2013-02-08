@@ -14,7 +14,7 @@ Redmine::Plugin.register :redmine_didyoumean do
     'min_word_length' => '2',
     'limit' => '5',
     'start_search_when' => '0',
-    'dict_dir' => '/home/hoge/dict_dir'
+    'dictionary_path' => '/home/hoge/redmine/plugins/okura_dict'
   }
 
   settings(:default => default_settings, :partial => 'settings/didyoumean_settings')
