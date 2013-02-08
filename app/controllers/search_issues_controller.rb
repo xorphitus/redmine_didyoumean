@@ -7,50 +7,33 @@ class SearchIssuesController < ApplicationController
   DEFAULT_LIMIT = 5
 
   def index
-    @query = params[:query] || ""
-    @query.strip!
+    @query = (params[:query] || "").strip
 
     logger.debug "Got request for [#{@query}]"
     logger.debug "Did you mean settings: #{Setting.plugin_redmine_didyoumean.to_json}"
 
     all_words = true # if true, returns records that contain all the words specified in the input query
+    min_length = Setting.plugin_redmine_didyoumean['min_word_length'].to_i
 
     # extract tokens from the query
     # eg. hello "bye bye" => ["hello", "bye bye"]
-    @tokens = to_nouns(@query).concat @query.scan(/\w+/)
-
-    min_length = Setting.plugin_redmine_didyoumean['min_word_length'].to_i
-    @tokens = @tokens.uniq.select {|w| w.length >= min_length}
+    @tokens = (to_nouns(@query).concat @query.scan(/\w+/))
+      .uniq
+      .select {|token| token.length >= min_length}
 
     if @tokens.present?
       # no more than 5 tokens to search for
       # this is probably too strict, in this use case
       @tokens.slice! 5..-1 if @tokens.size > 5
+      @tokens.map! {|token| "%#{token}%"}
 
       separator = all_words ? ' AND ' : ' OR '
 
-      @tokens.map! {|cur| "%#{cur}%"}
-
-      conditions = (['lower(subject) like lower(?)'] * @tokens.length).join(separator)
-      variables = @tokens
-
-      # pick the current project
-      project = Project.find(params[:project_id]) unless params[:project_id].blank?
-
-      # when editing an existing issue this will hold its id
-      issue_id = params[:issue_id] unless params[:issue_id].blank?
-
-      project_tree = to_project_tree project, Setting.plugin_redmine_didyoumean['project_filter']
-
-      additional_conditions, additional_variables = additional_params(project_tree, issue_id)
-      conditions += additional_conditions
-      variables = variables.concat additional_variables
-
       limit = Setting.plugin_redmine_didyoumean['limit'] || DEFAULT_LIMIT
-
+      conditions = query_conditions(@tokens, separator)
       # order by decreasing creation time. Some relevance sort would be a lot more appropriate here
-      @issues = Issue.visible.find(:all, :conditions => [conditions, *variables], :limit => limit, :order => '"issues"."id" DESC')
-      @count = Issue.visible.count(:all, :conditions => [conditions, *variables])
+      @issues = Issue.visible.find(:all, :conditions => conditions, :limit => limit, :order => '"issues"."id" DESC')
+      @count = Issue.visible.count(:all, :conditions => conditions)
 
       logger.debug "#{@count} results found, returning the first #{@issues.length}"
     else
@@ -71,15 +54,27 @@ class SearchIssuesController < ApplicationController
   end
 
   private
+  def query_conditions tokens, separator
+    # pick the current project
+    project = Project.find(params[:project_id]) if params[:project_id].present?
+    project_tree = to_project_tree(project, Setting.plugin_redmine_didyoumean['project_filter'])
+
+    additional_conditions, additional_variables = additional_params(project_tree, params[:issue_id])
+    conditions = (['lower(subject) like lower(?)'] * tokens.length).join(separator) + additional_conditions
+    variables = tokens.concat additional_variables
+
+    [conditions, *variables]
+  end
+
   def to_project_tree project, project_filter
     case project_filter
     when '2'
-      project_tree = Project.all
+      Project.all
     when '1'
       # search subprojects too
-      project_tree = project ? (project.self_and_descendants.active) : nil
+      project ? (project.self_and_descendants.active) : nil
     when '0'
-      project_tree = [project]
+      [project]
     else
       logger.warn "Unrecognized option for project filter: [#{Setting.plugin_redmine_didyoumean['project_filter']}], skipping"
       nil
@@ -105,7 +100,7 @@ class SearchIssuesController < ApplicationController
       additional_variables << valid_statuses
     end
 
-    if !issue_id.nil?
+    if issue_id.present?
       logger.debug "Excluding issue #{issue_id}"
       additional_conditions += " AND issues.id != (?)"
       additional_variables << issue_id
